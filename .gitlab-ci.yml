@@ -1,7 +1,9 @@
 compile:
   image: texlive/texlive:latest
   script:
-    - latexmk -pdf -interaction=nonstopmode -file-line-error main.tex
+    - latexmk -pdf -interaction=nonstopmode -file-line-error -outdir=build main.tex
   artifacts:
+    name: "report-v$CI_PIPELINE_IID"
     paths:
-      - main.pdf
+      - build/main.pdf
+    expire_in: 3 months
