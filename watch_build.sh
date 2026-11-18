@@ -163,7 +163,7 @@ pending_del() {
 }
 pending_clear() { PENDING=""; }
 
-mb() { awk -v b="${1:-0}" 'BEGIN{printf "%.2f MB", b/1048576}'; }
+mb() { awk -v b="${1:-0}" 'BEGIN{printf "%.4f MB", b/1048576}'; }
 
 require_tools() {
     local missing=()
