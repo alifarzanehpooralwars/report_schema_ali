@@ -241,30 +241,36 @@
 
 % =============================================================================
 %  BUILD VERSION — v<yyyymmdd>_<hhmm>_<10 random digits>
-%  e.g.  v20261118_1442_8392017465
+%  e.g.  v20261118_1542_8392017465
 %
-%  NOTE: the underscore must be \_ in text mode, otherwise TeX raises
-%        "Missing $ inserted". Do not put a bare _ in \docversion.
+%  Only TeX primitives are used: \year \month \day \time, plus \_ for the
+%  separator.
+%     * \hour / \minute / \second are NOT kernel commands -> "Undefined
+%       control sequence". Time comes from \time (minutes since midnight).
+%     * a bare _ raises "Missing $ inserted", so the separator is \_.
 %
-%  Precedence:
-%     1. build/version.tex if present (see below) — lets the build system
-%        or CI pin the version.
-%     2. otherwise: date + time + ten digits drawn at compile time.
+%  The ten digits are drawn with \pdfuniformdeviate (pdfTeX). Under another
+%  engine the fallback is 0000000000.
+%
+%  Override by creating build/version.tex containing:
+%      \newcommand{\docversion}{v20261118\_1542\_8392017465}
 % =============================================================================
 \makeatletter
-\newcommand{\vpad}[1]{\ifnum#1<10 0\fi\number#1}
-\newcommand{\vrandten}{%
+\newcommand*{\vtwo}[1]{\ifnum#1<10 0\fi\number#1}
+\newcommand*{\vhhmm}{%
+  \vtwo{\numexpr\time/60\relax}%
+  \vtwo{\numexpr\time-60*(\time/60)\relax}}
+\newcommand*{\vrandten}{%
   \ifdefined\pdfuniformdeviate
-    \the\pdfuniformdeviate 10\the\pdfuniformdeviate 10\the\pdfuniformdeviate 10%
-    \the\pdfuniformdeviate 10\the\pdfuniformdeviate 10\the\pdfuniformdeviate 10%
-    \the\pdfuniformdeviate 10\the\pdfuniformdeviate 10\the\pdfuniformdeviate 10%
-    \the\pdfuniformdeviate 10%
+    \pdfuniformdeviate 10\pdfuniformdeviate 10\pdfuniformdeviate 10%
+    \pdfuniformdeviate 10\pdfuniformdeviate 10\pdfuniformdeviate 10%
+    \pdfuniformdeviate 10\pdfuniformdeviate 10\pdfuniformdeviate 10%
+    \pdfuniformdeviate 10%
   \else
-    \vpad{\year}\vpad{\month}\vpad{\day}\vpad{\hour}\vpad{\minute}\vpad{\second}%
+    0000000000%
   \fi}
-\newcommand{\vstamp}{%
-  \the\year\vpad{\month}\vpad{\day}\textunderscore\vpad{\hour}\vpad{\minute}%
-  \textunderscore\vrandten}
+\newcommand*{\vstamp}{%
+  \the\year\vtwo{\month}\vtwo{\day}\_\vhhmm\_\vrandten}
 \IfFileExists{build/version.tex}
   {\input{build/version.tex}}          % external version wins (still needs \_)
   {\newcommand{\docversion}{v\vstamp}}
@@ -385,7 +391,7 @@ The identifier block is defined in \texttt{core/identifiers.xsd}:
 \code{XSD}{core/identifiers.xsd}{Definition of identifier and status types.}{identifiers}
 
 A conforming instance looks like this:
-\code{MyXML}{examples/testbeam-babyiaxo/run-0001.xml}{Example run document.}{run0001}
+\code{MyXML}{examples/testbeam-biaxo/run-0001.xml}{Example run document.}{run0001}
 
 \IfFileExists{b.pdf}{%
   \clearpage
