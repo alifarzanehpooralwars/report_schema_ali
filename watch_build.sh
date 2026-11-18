@@ -190,20 +190,6 @@ init_state_from_log() {
     REV="${REV:-0}"; BUILD_NO="${BUILD_NO:-0}"
 }
 
-# # --- one-time housekeeping: stray root-level artefacts ------------------------
-# prune_artefacts() {
-#     local f
-#     for f in main2.pdf main2.tex t.pdf main.pdf; do
-#         [[ -e "${PROJECT_DIR}/${f}" ]] || continue
-#         ( cd "$PROJECT_DIR" \
-#           && git ls-files --error-unmatch "$f" >/dev/null 2>&1 \
-#           && git rm -q --cached "$f" >/dev/null 2>&1 ) || true
-#     done
-#     local gi="${PROJECT_DIR}/.gitignore"
-#     touch "$gi"
-#     for pat in '/main.pdf' 'main2.*' 't.pdf'; do
-#         grep -qxF -- "$pat" "$gi" || printf '%s\n' "$pat" >> "$gi"
-#     done
 # }
 
 # ---------------------------------- VIEW -------------------------------------
