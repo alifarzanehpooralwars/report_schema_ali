@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  watch_build.sh — live LaTeX build watcher
+#  watch_build.sh — live LaTeX build watcher, multi-remote publisher
 #
 #  Author      : Ali Farzanehpoor Alwars  <a.farzaneh@desy.de>
 #  Affiliation : Deutsches Elektronen-Synchrotron DESY
 #  Target      : /home/ali/report_schema_ali/main.tex
+#
+#  Remotes
+#     desy    git@gitlab.desy.de:farzaneh/report_schema_ali.git
+#     github  git@github.com:alifarzanehpooralwars/report_schema_ali.git
+#     desy-sns:report_schema_ali   (rclone / WebDAV snapshots)
 #
 #  Usage
 #     ./watch_build.sh              # build once, then watch
@@ -12,23 +17,20 @@
 #     ./watch_build.sh --help
 #
 #  Behaviour
-#     * rebuilds ONLY on CLOSE_WRITE / MOVED_TO  (i.e. real Ctrl+S saves,
-#       never on keystrokes or partial writes)
-#     * latexmk + pdflatex with all available cores
-#     * single self-refreshing dashboard, no scrolling message spam
-#     * per-build record in .build-logs/versions.tsv (metadata + revision)
-#     * local zip snapshot on the SSD after every successful build
-#     * optional git commit / push (GIT_ENABLE / GIT_PUSH)
+#     * rebuilds ONLY on CLOSE_WRITE / MOVED_TO (real Ctrl+S saves)
+#     * latexmk + pdflatex, all cores
+#     * single self-refreshing dashboard, no message spam
+#     * per-build record in .build-logs/versions.tsv
+#     * local zip snapshot after every successful build
+#     * throttled push to DESY GitLab, GitHub, DESY Sync&Share
 #
 #  Dependencies
 #     sudo apt install inotify-tools latexmk texlive-latex-extra \
-#                      poppler-utils zip
+#                      poppler-utils zip git rclone
 # =============================================================================
 set -uo pipefail
 
 # --------------------------------- CONFIG ------------------------------------
-# Override any of these from the environment, e.g.
-#   PROJECT_DIR=/elsewhere ./watch_build.sh
 PROJECT_DIR="${PROJECT_DIR:-/home/ali/report_schema_ali}"
 MAIN_TEX="${MAIN_TEX:-main.tex}"
 
@@ -43,11 +45,34 @@ BACKUP_ENABLE="${BACKUP_ENABLE:-1}"
 BACKUP_ROOT="${BACKUP_ROOT:-/home/ali/backups/report_schema_ali}"
 KEEP_BACKUPS="${KEEP_BACKUPS:-15}"
 
-# --- GitHub (wire-up ready; off by default) -----------------------------------
-GIT_ENABLE="${GIT_ENABLE:-0}"
-GIT_PUSH="${GIT_PUSH:-0}"
-GIT_REMOTE="${GIT_REMOTE:-origin}"
+# --- git / remotes ------------------------------------------------------------
+GIT_ENABLE="${GIT_ENABLE:-1}"
+GIT_PUSH="${GIT_PUSH:-1}"
 GIT_BRANCH="${GIT_BRANCH:-main}"
+
+GITLAB_ENABLE="${GITLAB_ENABLE:-1}"
+GITLAB_REMOTE="${GITLAB_REMOTE:-desy}"
+GITLAB_URL="${GITLAB_URL:-git@gitlab.desy.de:farzaneh/report_schema_ali.git}"
+
+GITHUB_ENABLE="${GITHUB_ENABLE:-1}"
+GITHUB_REMOTE="${GITHUB_REMOTE:-github}"
+GITHUB_URL="${GITHUB_URL:-git@github.com:alifarzanehpooralwars/report_schema_ali.git}"
+
+SNS_ENABLE="${SNS_ENABLE:-1}"
+SNS_REMOTE="${SNS_REMOTE:-desy-sns}"
+SNS_PATH="${SNS_PATH:-report_schema_ali}"
+SNS_MODE="${SNS_MODE:-snapshots}"        # snapshots | mirror
+
+PUSH_MIN_INTERVAL="${PUSH_MIN_INTERVAL:-300}"
+LAST_PUSH_EPOCH=0
+PUSH_OK=()
+PUSH_FAIL=()
+
+# --- commit identity ----------------------------------------------------------
+export GIT_AUTHOR_NAME="${GIT_AUTHOR_NAME:-Ali Farzanehpoor Alwars}"
+export GIT_AUTHOR_EMAIL="${GIT_AUTHOR_EMAIL:-a.farzaneh@desy.de}"
+export GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME"
+export GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
 
 # --- watcher ------------------------------------------------------------------
 WATCH_REGEX="${WATCH_REGEX:-\.(tex|bib|sty|cls|bst)$}"
@@ -92,9 +117,10 @@ DESY report live-build watcher — Ali Farzanehpoor Alwars <a.farzaneh@desy.de>
   --no-build    start the watcher without an initial compilation
   -h, --help    show this help
 
+Remotes: DESY GitLab (desy), GitHub (github), DESY Sync&Share (desy-sns)
 Environment overrides: PROJECT_DIR, MAIN_TEX, BUILD_DIR, LOG_DIR,
 BACKUP_ROOT, KEEP_BACKUPS, BACKUP_ENABLE, GIT_ENABLE, GIT_PUSH,
-GIT_REMOTE, GIT_BRANCH, WATCH_REGEX, DEBOUNCE
+GITLAB_*, GITHUB_*, SNS_*, PUSH_MIN_INTERVAL, WATCH_REGEX, DEBOUNCE
 EOF
 }
 
@@ -118,9 +144,8 @@ require_tools() {
     command -v inotifywait >/dev/null 2>&1 || missing+=("inotify-tools")
     command -v latexmk     >/dev/null 2>&1 || missing+=("latexmk")
     command -v zip         >/dev/null 2>&1 || missing+=("zip")
-    if (( ${#missing[@]} > 0 )); then
-        die "missing packages: ${missing[*]}  ->  sudo apt install ${missing[*]}"
-    fi
+    (( ${#missing[@]} > 0 )) \
+        && die "missing packages: ${missing[*]}  ->  sudo apt install ${missing[*]}"
     [[ -f "${PROJECT_DIR}/${MAIN_TEX}" ]] \
         || die "cannot find ${PROJECT_DIR}/${MAIN_TEX}"
 }
@@ -162,7 +187,10 @@ build_frame() {
     printf '%s\n' "${C_DIM}────────────────────────────────────────────────────────────────────────${C_RESET}"
     printf ' %-11s %s · %s\n' "last save" "$LAST_SAVE" "$LAST_FILE"
     printf ' %-11s %s\n' "snapshot"   "$LAST_BACKUP"
-    printf ' %-11s %s\n' "session"    "${SESSION_BUILDS} builds · ${SESSION_OK} ok · ${SESSION_FAIL} failed"
+    printf ' %-11s %s\n' "remotes"    \
+      "ok:[${PUSH_OK[*]:-—}]  fail:[${PUSH_FAIL[*]:-—}]  throttle:${PUSH_MIN_INTERVAL}s"
+    printf ' %-11s %s\n' "session"    \
+      "${SESSION_BUILDS} builds · ${SESSION_OK} ok · ${SESSION_FAIL} failed"
     printf '%s\n' "${C_DIM}────────────────────────────────────────────────────────────────────────${C_RESET}"
     printf ' %s⟳  waiting for the next save …        Ctrl-C to stop%s\n' "$C_DIM" "$C_RESET"
     printf '%s\n' "${C_CYN}════════════════════════════════════════════════════════════════════════${C_RESET}"
@@ -198,24 +226,67 @@ make_backup() {
         LAST_BACKUP="backup failed"
         log_session "backup FAILED -> $dest"
     fi
-    # prune old snapshots
     ls -1t "${BACKUP_ROOT}"/*.zip 2>/dev/null \
         | tail -n +$(( KEEP_BACKUPS + 1 )) | xargs -r rm -f
 }
 
-# ---------------------------------- GITHUB -----------------------------------
+# ---------------------------------- GIT / SNS --------------------------------
+_push_remote() {
+    local name="$1" url="$2"
+    ( cd "$PROJECT_DIR" || exit 1
+      if git remote get-url "$name" >/dev/null 2>&1
+         then git remote set-url "$name" "$url"
+         else git remote add    "$name" "$url"; fi
+      timeout 180 git push -q "$name" "HEAD:${GIT_BRANCH}" )
+}
+
+sns_sync() {
+    (( SNS_ENABLE )) || return 0
+    command -v rclone >/dev/null 2>&1 || { PUSH_FAIL+=("sns:rclone"); return 0; }
+
+    local rc=0
+    if [[ "$SNS_MODE" == "mirror" ]]; then
+        rclone sync "$PROJECT_DIR" "${SNS_REMOTE}:${SNS_PATH}" \
+            --exclude 'build/**' --exclude '.git/**' --exclude '.build-logs/**' \
+            --create-empty-src-dirs --quiet --timeout 120 || rc=$?
+    else
+        [[ "$LAST_BACKUP" == *.zip ]] || return 0
+        rclone copy "${BACKUP_ROOT}/${LAST_BACKUP}" \
+            "${SNS_REMOTE}:${SNS_PATH}/snapshots" --quiet --timeout 120 || rc=$?
+    fi
+    (( rc == 0 )) && PUSH_OK+=("sns") || PUSH_FAIL+=("sns")
+}
+
 git_sync() {
     (( GIT_ENABLE )) || return 0
-    ( cd "$PROJECT_DIR" && git rev-parse --git-dir >/dev/null 2>&1 ) || return 0
-    (
-        cd "$PROJECT_DIR" || return 0
-        git add -A
-        git commit -q -m "build v${REV}: ${STATE} ($(date '+%Y-%m-%d %H:%M:%S'))" || true
-        if (( GIT_PUSH )); then
-            git push -q "$GIT_REMOTE" "$GIT_BRANCH" || log_session "git push failed"
-        fi
-    )
-    return 0
+    command -v git >/dev/null 2>&1 || { PUSH_FAIL+=("git:missing"); return 0; }
+    ( cd "$PROJECT_DIR" && git rev-parse --git-dir >/dev/null 2>&1 ) \
+        || { PUSH_FAIL+=("not-a-repo"); return 0; }
+
+    ( cd "$PROJECT_DIR" || exit 1
+      git add -A
+      git diff --cached --quiet && exit 0
+      git commit -q -m "build v${REV}: ${STATE} · $(date '+%Y-%m-%d %H:%M:%S')"
+    ) || { PUSH_FAIL+=("commit"); return 0; }
+
+    (( GIT_PUSH )) || return 0
+
+    local now; now=$(date +%s)
+    (( now - LAST_PUSH_EPOCH < PUSH_MIN_INTERVAL )) && return 0
+    LAST_PUSH_EPOCH=$now
+
+    PUSH_OK=(); PUSH_FAIL=()
+
+    if (( GITLAB_ENABLE )); then
+        _push_remote "$GITLAB_REMOTE" "$GITLAB_URL" \
+            && PUSH_OK+=("gitlab") || PUSH_FAIL+=("gitlab")
+    fi
+    if (( GITHUB_ENABLE )); then
+        _push_remote "$GITHUB_REMOTE" "$GITHUB_URL" \
+            && PUSH_OK+=("github") || PUSH_FAIL+=("github")
+    fi
+    sns_sync
+    log_session "push: ok=[${PUSH_OK[*]:-}] fail=[${PUSH_FAIL[*]:-}]"
 }
 
 # ---------------------------------- BUILD ------------------------------------
@@ -268,9 +339,7 @@ run_build() {
         PDF_PAGES="—"; PDF_SIZE="no pdf"
     fi
 
-    if [[ "$STATE" == "ok" ]]; then
-        make_backup
-    fi
+    [[ "$STATE" == "ok" ]] && make_backup
     record_version
     git_sync
     log_session "build=${BUILD_NO} rev=v${REV} state=${STATE} dur=${DUR_S}s reason=${reason}"
@@ -283,7 +352,6 @@ watch_loop() {
     while IFS= read -r fname; do
         [[ "$fname" =~ $WATCH_REGEX ]] || continue
         LAST_FILE="$fname"
-        # debounce: swallow the burst of events produced by a single save
         while IFS= read -r -t "$DEBOUNCE" _; do :; done
         LAST_SAVE="$(date '+%H:%M:%S')"
         run_build "save: ${fname}"
@@ -293,7 +361,7 @@ watch_loop() {
 # --------------------------------- CLEANUP -----------------------------------
 cleanup() {
     trap - EXIT INT TERM
-    printf '\033[?25h\033[0m'          # restore cursor + colours
+    printf '\033[?25h\033[0m'
     log_session "session end: ${SESSION_BUILDS} builds, ${SESSION_OK} ok, ${SESSION_FAIL} failed"
     printf '\n %sSession:%s %d builds · %d ok · %d failed\n' \
            "$C_BOLD" "$C_RESET" "$SESSION_BUILDS" "$SESSION_OK" "$SESSION_FAIL"
@@ -318,7 +386,7 @@ main() {
     init_state_from_log
     trap cleanup EXIT INT TERM
 
-    printf '\033[2J\033[?25l'          # clear + hide cursor
+    printf '\033[2J\033[?25l'
     log_session "session start (cores=${CORES}, project=${PROJECT_DIR})"
 
     draw

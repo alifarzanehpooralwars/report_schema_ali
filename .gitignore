@@ -9,3 +9,8 @@ build/
 *.fdb_latexmk
 *.bbl
 *.blg
+
+# stray artefacts
+/main.pdf
+main2.*
+t.pdf
