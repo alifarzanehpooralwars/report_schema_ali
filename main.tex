@@ -251,34 +251,50 @@
 %  Optional override: create build/version.tex containing
 %      \newcommand{\docversion}{v20261118\_1542\_8392017465}
 % =============================================================================
+
 \makeatletter
-\newcommand*{\vtwo}[1]{\ifnum#1<10 0\fi\number#1}
+
+\newcommand*{\vtwo}[1]{%
+  \ifnum#1<10 0\fi
+  \number#1%
+}
+
 \newcommand*{\vhhmm}{%
   \vtwo{\numexpr\time/60\relax}%
-  \vtwo{\numexpr\time-60*(\time/60)\relax}}
+  \vtwo{\numexpr\time-60*(\time/60)\relax}%
+}
+
 \newcommand*{\vrandten}{%
   \ifdefined\pdfuniformdeviate
-    \number\pdfuniformdeviate 10%
-    \number\pdfuniformdeviate 10%
-    \number\pdfuniformdeviate 10%
-    \number\pdfuniformdeviate 10%
-    \number\pdfuniformdeviate 10%
-    \number\pdfuniformdeviate 10%
-    \number\pdfuniformdeviate 10%
-    \number\pdfuniformdeviate 10%
-    \number\pdfuniformdeviate 10%
-    \number\pdfuniformdeviate 10%
+    \number\pdfuniformdeviate 10\relax
+    \number\pdfuniformdeviate 10\relax
+    \number\pdfuniformdeviate 10\relax
+    \number\pdfuniformdeviate 10\relax
+    \number\pdfuniformdeviate 10\relax
+    \number\pdfuniformdeviate 10\relax
+    \number\pdfuniformdeviate 10\relax
+    \number\pdfuniformdeviate 10\relax
+    \number\pdfuniformdeviate 10\relax
+    \number\pdfuniformdeviate 10\relax
   \else
     0000000000%
-  \fi}
-\newcommand*{\vstamp}{%
-  \the\year\vtwo{\month}\vtwo{\day}\_\vhhmm\_\vrandten}
+  \fi
+}
 
-% >>> THIS was missing: define \docversion (or load the pinned one) <<<
+\newcommand*{\vstamp}{%
+  \the\year
+  \vtwo{\month}%
+  \vtwo{\day}%
+  \_\vhhmm
+  \_\vrandten
+}
+
 \IfFileExists{build/version.tex}
-  {\input{build/version.tex}}          % external version wins
+  {\input{build/version.tex}}
   {\newcommand*{\docversion}{v\vstamp}}
+
 \makeatother
+
 
 % =============================================================================
 \begin{document}
