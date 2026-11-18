@@ -6,4 +6,5 @@ compile:
     name: "report-v$CI_PIPELINE_IID"
     paths:
       - build/main.pdf
+    expose_as: "report PDF"
     expire_in: 3 months
