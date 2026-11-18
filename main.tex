@@ -1,0 +1,225 @@
+% =============================================================================
+%  main.tex — DESY Test Beam Metadata Schema
+%  Author : Ali Farzanehpoor Alwars  <a.farzaneh@desy.de>
+%  Build  : latexmk -pdf -outdir=build main.tex   (or ./watch_build.sh)
+% =============================================================================
+\documentclass[11pt,a4paper]{report}
+
+% ------------------------------------------------------------------ fonts ---
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath,amsthm,mathtools}
+\IfFileExists{libertinus.sty}
+  {\usepackage{libertinus}}
+  {\usepackage{lmodern}\PackageWarningNoLine{main}{libertinus missing -> lmodern}}
+
+% ------------------------------------------------------------- typography ---
+\usepackage[english]{babel}
+\usepackage{microtype}
+\usepackage{setspace}
+\setstretch{1.10}
+
+% --------------------------------------------------------------- geometry ---
+\usepackage[a4paper,
+            top=2.6cm, bottom=2.6cm, left=2.8cm, right=2.8cm,
+            headheight=1.4cm, headsep=0.6cm, footskip=1.2cm]{geometry}
+
+% --------------------------------------------------------------- graphics ---
+\usepackage{graphicx}
+\graphicspath{{./}{./images/}}
+\usepackage{float}
+\usepackage{caption}
+\captionsetup{font=small,labelfont=sc,labelsep=period,margin=1em}
+
+% ----------------------------------------------------------------- tables ---
+\usepackage{booktabs,array,multirow,tabularx}
+
+% ------------------------------------------------------------------- tikz ---
+\usepackage{tikz}
+\usetikzlibrary{shapes,arrows.meta,positioning,calc,decorations.pathreplacing,fit,backgrounds}
+
+% ------------------------------------------------------------------ colors ---
+\usepackage{xcolor}
+\definecolor{desyblue}{RGB}{0,60,120}
+\definecolor{linkcolor}{RGB}{25,55,110}
+\definecolor{citecolor}{RGB}{25,90,50}
+
+% ------------------------------------------- header / footer (DESY logo) ----
+\usepackage{fancyhdr}
+
+% Logo with graceful fallback if the PDF asset is not next to main.tex
+\newcommand{\desylogo}[1]{%
+  \IfFileExists{Desy_logo_3c_web.pdf}%
+    {\includegraphics[height=#1]{Desy_logo_3c_web.pdf}}%
+    {\textbf{DESY}}%
+}
+
+% Marks: left header = current *section* (chapter title on a chapter's first
+% page, where no section mark exists yet). Do NOT use \leftmark.
+\renewcommand{\chaptermark}[1]{\markboth{}{\thechapter\quad #1}}
+\renewcommand{\sectionmark}[1]{\markright{\thesection\quad #1}}
+
+\newcommand{\desyheadrule}{%
+  \renewcommand{\headrulewidth}{0.4pt}%
+  \renewcommand{\headrule}{%
+    \hbox to\headwidth{\color{desyblue}\leaders\hrule height \headrulewidth\hfill}}}
+
+\fancypagestyle{desy}{%
+  \fancyhf{}%
+  \fancyhead[L]{\small\nouppercase{\rightmark}}%
+  \fancyhead[R]{\desylogo{0.80cm}}%
+  \fancyfoot[C]{\small\thepage}%
+  \desyheadrule
+}
+% Chapter-opening pages keep the very same header (not the classic empty one)
+\fancypagestyle{plain}{%
+  \fancyhf{}%
+  \fancyhead[L]{\small\nouppercase{\rightmark}}%
+  \fancyhead[R]{\desylogo{0.80cm}}%
+  \fancyfoot[C]{\small\thepage}%
+  \desyheadrule
+}
+\pagestyle{desy}
+
+% ---------------------------------------------------------------- code ------
+\usepackage{listings}
+\lstset{
+    basicstyle=\ttfamily\small, breaklines=true, frame=single,
+    backgroundcolor=\color{gray!5},
+    keywordstyle=\color{blue!70!black},
+    commentstyle=\color{green!40!black},
+    stringstyle=\color{red!60!black}
+}
+
+% -------------------------------------------------------- section styling ---
+\usepackage{titlesec}
+\titleformat{\chapter}[block]
+  {\normalfont\huge\bfseries\raggedright}{\thechapter\quad}{0pt}{}
+\titlespacing*{\chapter}{0pt}{-1em}{2em}
+\titleformat{\section}
+  {\normalfont\Large\bfseries}{\thesection}{0.8em}{}
+\titleformat{\subsection}
+  {\normalfont\large\bfseries}{\thesubsection}{0.8em}{}
+
+% ----------------------------------------------------------------- links ----
+\usepackage[colorlinks=true,
+            linkcolor=linkcolor, citecolor=citecolor, urlcolor=linkcolor,
+            bookmarks=true, bookmarksopen=true,
+            pdftitle={Metadata Schema for DESY Test Beam},
+            pdfauthor={Ali Farzanehpoor Alwars},
+            pdfsubject={DESY Test Beam -- metadata schema},
+            pdfkeywords={DESY, test beam, metadata, schema}]{hyperref}
+
+% ---------------------------------------------------------------- macros ----
+\newcommand{\docversion}{v0.1}
+
+% =============================================================================
+\begin{document}
+
+% ------------------------------------------------------------- title page ---
+\begin{titlepage}
+  \thispagestyle{empty}
+  \centering
+  \vspace*{1.2cm}
+  \desylogo{2.0cm}\par
+  \vspace{0.5cm}
+  {\large Deutsches Elektronen-Synchrotron DESY\par}
+  \vspace{3.6cm}
+  {\Huge\bfseries Metadata Schema for\\[0.4em] DESY Test Beam\par}
+  \vspace{0.9cm}
+  {\Large Technical Report\par}
+  \vfill
+  {\large Ali Farzanehpoor Alwars\par}
+  \vspace{0.25cm}
+  {\normalsize\href{mailto:a.farzaneh@desy.de}{\texttt{a.farzaneh@desy.de}}\par}
+  \vspace{0.25cm}
+  {\normalsize Version \docversion\ ---\ \today\par}
+\end{titlepage}
+
+% ------------------------------------------------------------ front matter --
+\pagenumbering{roman}
+
+\chapter*{Abstract}
+\markboth{}{Abstract}
+\addcontentsline{toc}{chapter}{Abstract}
+This report specifies a metadata schema for DESY test-beam campaigns
+and the serialisation conventions used by the acquisition software.
+Replace this paragraph with the real abstract.
+
+\tableofcontents
+\thispagestyle{plain}
+\clearpage
+
+% -------------------------------------------------------------- main matter -
+\pagenumbering{arabic}
+
+\chapter{Introduction}
+\label{ch:intro}
+The running header of this page shows the \emph{section} on the left and the
+DESY logo on the right, both above the rule.
+
+\section{Background}
+\label{sec:background}
+Test-beam data are only reusable if the acquisition conditions are recorded
+in a machine-readable way.
+\begin{equation}
+    x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}
+    \label{eq:quadratic}
+\end{equation}
+
+\section{Scope}
+\label{sec:scope}
+The schema covers run, device, and beam-line metadata.
+
+\chapter{Schema Definition}
+\label{ch:schema}
+
+\section{Entities}
+\label{sec:entities}
+\begin{table}[H]
+    \centering
+    \caption{Comparison of serialisation formats.}
+    \label{tab:formats}
+    \begin{tabular}{@{}lcc@{}}
+        \toprule
+        \textbf{Format} & \textbf{Human readable} & \textbf{Schema support} \\
+        \midrule
+        JSON  & yes & full \\
+        YAML  & yes & full \\
+        ROOT  & no  & partial \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\section{Relations}
+\label{sec:relations}
+\begin{figure}[H]
+    \centering
+    \begin{tikzpicture}[
+        node distance=2cm,
+        box/.style={rectangle, draw=linkcolor, fill=linkcolor!8, thick,
+                    minimum width=2.6cm, minimum height=1cm,
+                    align=center, rounded corners=2pt},
+        arrow/.style={-{Stealth[scale=1.1]}, thick}
+    ]
+        \node[box] (run)     {Run};
+        \node[box, right=of run]     (event)   {Event};
+        \node[box, right=of event]   (payload) {Payload};
+        \draw[arrow] (run)   -- (event);
+        \draw[arrow] (event) -- (payload);
+    \end{tikzpicture}
+    \caption{Entity relations of the schema.}
+    \label{fig:entities}
+\end{figure}
+
+\chapter{Conclusion}
+\label{ch:conclusion}
+The schema is versioned together with the report.
+
+% ------------------------------------------------------------- bibliography -
+\IfFileExists{references.bib}{%
+  \bibliographystyle{plain}%
+  \bibliography{references}%
+}{}
+
+\end{document}
