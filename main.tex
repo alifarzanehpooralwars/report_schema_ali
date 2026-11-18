@@ -243,16 +243,12 @@
 %  BUILD VERSION — v<yyyymmdd>_<hhmm>_<10 random digits>
 %  e.g.  v20261118_1542_8392017465
 %
-%  Only TeX primitives are used: \year \month \day \time, plus \_ for the
-%  separator.
-%     * \hour / \minute / \second are NOT kernel commands -> "Undefined
-%       control sequence". Time comes from \time (minutes since midnight).
-%     * a bare _ raises "Missing $ inserted", so the separator is \_.
+%  Only TeX primitives: \year \month \day \time, plus \_ for the separator.
+%    * \hour/\minute/\second are NOT kernel commands -> use \time.
+%    * a bare _ raises "Missing $ inserted" -> use \_.
+%    * \the\pdfuniformdeviate overflows -> \number\pdfuniformdeviate.
 %
-%  The ten digits are drawn with \pdfuniformdeviate (pdfTeX). Under another
-%  engine the fallback is 0000000000.
-%
-%  Override by creating build/version.tex containing:
+%  Optional override: create build/version.tex containing
 %      \newcommand{\docversion}{v20261118\_1542\_8392017465}
 % =============================================================================
 \makeatletter
@@ -277,6 +273,11 @@
   \fi}
 \newcommand*{\vstamp}{%
   \the\year\vtwo{\month}\vtwo{\day}\_\vhhmm\_\vrandten}
+
+% >>> THIS was missing: define \docversion (or load the pinned one) <<<
+\IfFileExists{build/version.tex}
+  {\input{build/version.tex}}          % external version wins
+  {\newcommand*{\docversion}{v\vstamp}}
 \makeatother
 
 % =============================================================================
