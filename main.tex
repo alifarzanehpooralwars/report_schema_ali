@@ -18,6 +18,14 @@
   {\usepackage{libertinus}}
   {\usepackage{lmodern}\PackageWarningNoLine{main}{libertinus missing -> lmodern}}
 
+% --- monospace font for listings (readable, sans-style, upright) ------------
+% Without this, \ttfamily falls back to Computer Modern Typewriter under
+% T1 + libertinus: thin, slanted-looking, poor at small sizes.
+% Optional: if inconsolata is absent the compile still succeeds.
+\IfFileExists{inconsolata.sty}
+  {\usepackage[varqu,varl,scaled=0.96]{inconsolata}}
+  {\PackageWarningNoLine{main}{inconsolata missing -- using default monospace}}
+
 % ------------------------------------------------------------- typography ---
 \usepackage[english]{babel}
 \usepackage{microtype}
@@ -52,8 +60,21 @@
 \definecolor{linkcolor}{RGB}{25,55,110}
 \definecolor{citecolor}{RGB}{25,90,50}
 
-% ------------------------------------------- header / footer (DESY logo) ----
+% =============================================================================
+%  HEADER / FOOTER — DESY logo, tunable geometry
+% =============================================================================
 \usepackage{fancyhdr}
+
+% ---- 1) KNOBS: logo and header-text placement -------------------------------
+% Height of the logo inside the running header. Bigger = more prominent.
+\newcommand{\logoheight}{0.66cm}
+% Logo offset: positive x = right, positive y = up (raisebox direction).
+\newcommand{\logoXshift}{0pt}
+\newcommand{\logoYshift}{-1.5pt}
+% Header text offset: same convention.
+\newcommand{\headtextXshift}{0pt}
+\newcommand{\headtextYshift}{0.5pt}
+% -----------------------------------------------------------------------------
 
 \newcommand{\desylogo}[1]{%
   \IfFileExists{Desy_logo_3c_web.pdf}%
@@ -71,25 +92,33 @@
   \renewcommand{\headrule}{%
     \hbox to\headwidth{\color{desyblue}\leaders\hrule height \headrulewidth\hfill}}}
 
-% Normal running pages
+% Build the two header cells once, so both styles stay identical.
+\newcommand{\desyheadleft}{%
+  \raisebox{\headtextYshift}{\hspace*{\headtextXshift}%
+    \small\nouppercase{\rightmark}}}
+\newcommand{\desyheadright}{%
+  \raisebox{\logoYshift}{\hspace*{\logoXshift}%
+    \desylogo{\logoheight}}}
+
 \fancypagestyle{desy}{%
   \fancyhf{}%
-  \fancyhead[L]{\small\nouppercase{\rightmark}}%
-  \fancyhead[R]{\desylogo{0.50cm}}%
+  \fancyhead[L]{\desyheadleft}%
+  \fancyhead[R]{\desyheadright}%
   \fancyfoot[C]{\small\thepage}%
   \desyheadrule
 }
-% Chapter-opening pages — same logo height, otherwise it visibly jumps.
 \fancypagestyle{plain}{%
   \fancyhf{}%
-  \fancyhead[L]{\small\nouppercase{\rightmark}}%
-  \fancyhead[R]{\desylogo{0.50cm}}%
+  \fancyhead[L]{\desyheadleft}%
+  \fancyhead[R]{\desyheadright}%
   \fancyfoot[C]{\small\thepage}%
   \desyheadrule
 }
 \pagestyle{desy}
 
-% ---------------------------------------------------------------- code ------
+% =============================================================================
+%  CODE / LISTINGS — syntax highlighting
+% =============================================================================
 \usepackage{listings}
 
 % --- palette: print-safe adaptation of VS Code Dark+ -------------------------
@@ -111,6 +140,7 @@
   morecomment=[s]{<?}{?>},
   moredelim=[s][\color{codecomment}]{<!DOCTYPE}{>},
   moredelim=[s][\color{codecomment}]{<![CDATA[}{]]>},
+  keywordstyle=[1]{\color{codekeyword}\bfseries},
 }
 
 % --- instance XML: your vocabulary, so tags are coloured too ------------------
@@ -122,6 +152,7 @@
     storage, catalogue, access, policy, rights, licence, funding,
     references, relations, measurement, configuration
   },
+  keywordstyle=[1]{\color{codekeyword}\bfseries},
 }
 
 % --- XSD: XML + curated vocabulary (elements blue, attributes teal) ----------
@@ -145,19 +176,24 @@
     schemaLocation, namespace, version, encoding, processContents,
     memberTypes, itemType, xpath, minVersion, maxVersion, mode, test
   },
+  keywordstyle=[1]{\color{codekeyword}\bfseries},
   keywordstyle=[2]{\color{codeattr}},
 }
 
 % --- shared layout -----------------------------------------------------------
 \lstset{
   basicstyle=\ttfamily\small,
-  keywordstyle=\color{codekeyword}\bfseries,
+  identifierstyle=\color{black!88},
+  keywordstyle=\color{codekeyword}\bfseries,     % class 1
+  keywordstyle=[1]{\color{codekeyword}\bfseries},
+  keywordstyle=[2]{\color{codeattr}},
   stringstyle=\color{codestring},
   commentstyle=\color{codecomment}\itshape,
   backgroundcolor=\color{codebg},
   frame=single, rulecolor=\color{coderule}, framesep=4pt,
   xleftmargin=12pt, xrightmargin=0pt,
   columns=fullflexible, keepspaces=true,
+  basewidth=0.5em,                               % steady monospace rhythm
   breaklines=true, breakatwhitespace=true,
   postbreak=\mbox{\textcolor{gray}{$\hookrightarrow$}\space},
   showstringspaces=false,
@@ -203,8 +239,35 @@
             pdfsubject={DESY Test Beam -- metadata schema},
             pdfkeywords={DESY, test beam, metadata, schema}]{hyperref}
 
-% ---------------------------------------------------------------- macros ----
-\newcommand{\docversion}{v0.1}
+% =============================================================================
+%  BUILD VERSION — yyyymmdd_hhmm_<10 random digits>
+%
+%  Pattern:  v20261118_1442_8392017465
+%
+%  Precedence:
+%     1. build/version.tex, if the build system writes one
+%        (contents: \newcommand{\docversion}{v...}) — lets CI or the watcher
+%        pin the exact version.
+%     2. otherwise: today's date + current time + ten pseudo-random digits
+%        drawn at compile time with \pdfuniformdeviate (pdfTeX).
+% =============================================================================
+\makeatletter
+\newcommand{\vpad}[1]{\ifnum#1<10 0\fi\number#1}
+\newcommand{\vrandten}{%
+  \ifdefined\pdfuniformdeviate
+    \the\pdfuniformdeviate 10\the\pdfuniformdeviate 10\the\pdfuniformdeviate 10%
+    \the\pdfuniformdeviate 10\the\pdfuniformdeviate 10\the\pdfuniformdeviate 10%
+    \the\pdfuniformdeviate 10\the\pdfuniformdeviate 10\the\pdfuniformdeviate 10%
+    \the\pdfuniformdeviate 10%
+  \else
+    \vpad{\year}\vpad{\month}\vpad{\day}\vpad{\hour}\vpad{\minute}\vpad{\second}%
+  \fi}
+\newcommand{\vstamp}{%
+  \the\year\vpad{\month}\vpad{\day}_\vpad{\hour}\vpad{\minute}_\vrandten}
+\IfFileExists{build/version.tex}
+  {\input{build/version.tex}}                       % external version wins
+  {\newcommand{\docversion}{v\vstamp}}
+\makeatother
 
 % =============================================================================
 \begin{document}
@@ -328,8 +391,6 @@ A conforming instance looks like this:
 \code{MyXML}{examples/testbeam-babyiaxo/run-0001.xml}{Example run document.}{run0001}
 
 % --- 3) an external PDF, inserted page-for-page, as an appendix ------------
-% \includepdf starts a new page group; the DESY header is kept but page
-% numbering inside these pages is the source PDF's own.
 \IfFileExists{b.pdf}{%
   \clearpage
   \appendix
