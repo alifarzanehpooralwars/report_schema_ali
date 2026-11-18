@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  watch_build.sh — live LaTeX build watcher, multi-remote publisher
+#  watch_build.sh — resilient live LaTeX build watcher & multi-remote publisher
 #
 #  Author      : Ali Farzanehpoor Alwars  <a.farzaneh@desy.de>
 #  Affiliation : Deutsches Elektronen-Synchrotron DESY
+#  Timezone    : Europe/Berlin (all timestamps)
 #  Target      : /home/ali/report_schema_ali/main.tex
 #
 #  Remotes
@@ -11,24 +12,25 @@
 #     github  git@github.com:alifarzanehpooralwars/report_schema_ali.git
 #     desy-sns:report_schema_ali   (rclone / WebDAV snapshots)
 #
+#  Offline policy
+#     Every remote is attempted independently with a short timeout.
+#     A remote that cannot be reached is put on a PENDING list and retried
+#     on a timer. Nothing blocks, nothing aborts. When the VPN comes back
+#     the pending pushes flush by themselves on the next retry tick.
+#
 #  Usage
 #     ./watch_build.sh              # build once, then watch
 #     ./watch_build.sh --no-build   # watch only
 #     ./watch_build.sh --help
-#
-#  Behaviour
-#     * rebuilds ONLY on CLOSE_WRITE / MOVED_TO (real Ctrl+S saves)
-#     * latexmk + pdflatex, all cores
-#     * single self-refreshing dashboard, no message spam
-#     * per-build record in .build-logs/versions.tsv
-#     * local zip snapshot after every successful build
-#     * throttled push to DESY GitLab, GitHub, DESY Sync&Share
 #
 #  Dependencies
 #     sudo apt install inotify-tools latexmk texlive-latex-extra \
 #                      poppler-utils zip git rclone
 # =============================================================================
 set -uo pipefail
+
+# ------------------------------------------------------------------ clock ----
+export TZ="${REPORT_TZ:-Europe/Berlin}"
 
 # --------------------------------- CONFIG ------------------------------------
 PROJECT_DIR="${PROJECT_DIR:-/home/ali/report_schema_ali}"
@@ -63,10 +65,16 @@ SNS_REMOTE="${SNS_REMOTE:-desy-sns}"
 SNS_PATH="${SNS_PATH:-report_schema_ali}"
 SNS_MODE="${SNS_MODE:-snapshots}"        # snapshots | mirror
 
-PUSH_MIN_INTERVAL="${PUSH_MIN_INTERVAL:-300}"
-LAST_PUSH_EPOCH=0
-PUSH_OK=()
-PUSH_FAIL=()
+# --- resilience timing (seconds) ---------------------------------------------
+PUSH_MIN_INTERVAL="${PUSH_MIN_INTERVAL:-120}"   # min gap between network attempts
+RETRY_TICK="${RETRY_TICK:-10}"                  # watcher wake-up period
+GIT_TIMEOUT="${GIT_TIMEOUT:-45}"                # hard cap per git push
+SSH_CONNECT_TIMEOUT="${SSH_CONNECT_TIMEOUT:-6}" # per-connection cap
+RCLONE_CONTIMEOUT="${RCLONE_CONTIMEOUT:-10}"
+RCLONE_TIMEOUT="${RCLONE_TIMEOUT:-30}"
+
+export GIT_SSH_COMMAND="ssh -o ConnectTimeout=${SSH_CONNECT_TIMEOUT} \
+-o BatchMode=yes -o ServerAliveInterval=5 -o ServerAliveCountMax=2"
 
 # --- commit identity ----------------------------------------------------------
 export GIT_AUTHOR_NAME="${GIT_AUTHOR_NAME:-Ali Farzanehpoor Alwars}"
@@ -107,37 +115,55 @@ LAST_FILE="—"
 LAST_BACKUP="—"
 OPT_NO_BUILD=0
 
+PENDING=""                 # space separated: gitlab github sns
+PUSH_OK=()
+PUSH_FAIL=()
+LAST_ATTEMPT_EPOCH=0
+LAST_FLUSH_HUMAN="—"
+DRAW_SIG=""
+
 # --------------------------------- HELPERS -----------------------------------
 usage() {
     cat <<EOF
 DESY report live-build watcher — Ali Farzanehpoor Alwars <a.farzaneh@desy.de>
+Timezone: ${TZ}
 
   ./watch_build.sh [options]
 
   --no-build    start the watcher without an initial compilation
   -h, --help    show this help
 
-Remotes: DESY GitLab (desy), GitHub (github), DESY Sync&Share (desy-sns)
+Remotes: DESY GitLab (desy), GitHub (github), DESY Sync&Share (desy-sns).
+Unreachable remotes are queued and retried automatically.
+
 Environment overrides: PROJECT_DIR, MAIN_TEX, BUILD_DIR, LOG_DIR,
 BACKUP_ROOT, KEEP_BACKUPS, BACKUP_ENABLE, GIT_ENABLE, GIT_PUSH,
-GITLAB_*, GITHUB_*, SNS_*, PUSH_MIN_INTERVAL, WATCH_REGEX, DEBOUNCE
+GITLAB_*, GITHUB_*, SNS_*, PUSH_MIN_INTERVAL, RETRY_TICK,
+GIT_TIMEOUT, SSH_CONNECT_TIMEOUT, RCLONE_*, WATCH_REGEX, DEBOUNCE, REPORT_TZ
 EOF
 }
 
 die() { printf '%s\n' "${C_RED}error:${C_RESET} $*" >&2; exit 1; }
 
+now_iso()   { date -Is; }
+now_clock() { date '+%H:%M:%S'; }
+
 log_session() {
-    printf '%s\t%s\n' "$(date -Is)" "$*" >> "$SESSION_LOG"
+    printf '%s\t%s\n' "$(now_iso)" "$*" >> "$SESSION_LOG"
 }
 
-human_size() {
-    local bytes="$1"
-    if command -v numfmt >/dev/null 2>&1; then
-        numfmt --to=iec-i --suffix=B "$bytes" 2>/dev/null || echo "${bytes}B"
-    else
-        echo "${bytes}B"
-    fi
+# --- pending list -------------------------------------------------------------
+pending_add() {
+    case " $PENDING " in *" $1 "*) return 0 ;; esac
+    PENDING="${PENDING:+$PENDING }$1"
 }
+pending_del() {
+    [[ -z "$PENDING" ]] && return 0
+    PENDING="$(printf '%s\n' $PENDING | grep -vx -- "$1" | tr '\n' ' ' | sed 's/ *$//')"
+}
+pending_clear() { PENDING=""; }
+
+mb() { awk -v b="${1:-0}" 'BEGIN{printf "%.2f MB", b/1048576}'; }
 
 require_tools() {
     local missing=()
@@ -158,6 +184,22 @@ init_state_from_log() {
     REV="${REV:-0}"; BUILD_NO="${BUILD_NO:-0}"
 }
 
+# --- one-time housekeeping: stray root-level artefacts ------------------------
+prune_artefacts() {
+    local f
+    for f in main2.pdf main2.tex t.pdf main.pdf; do
+        [[ -e "${PROJECT_DIR}/${f}" ]] || continue
+        ( cd "$PROJECT_DIR" \
+          && git ls-files --error-unmatch "$f" >/dev/null 2>&1 \
+          && git rm -q --cached "$f" >/dev/null 2>&1 ) || true
+    done
+    local gi="${PROJECT_DIR}/.gitignore"
+    touch "$gi"
+    for pat in '/main.pdf' 'main2.*' 't.pdf'; do
+        grep -qxF -- "$pat" "$gi" || printf '%s\n' "$pat" >> "$gi"
+    done
+}
+
 # ---------------------------------- VIEW -------------------------------------
 build_frame() {
     local st stc
@@ -168,9 +210,17 @@ build_frame() {
         *)        st="·  idle";       stc="$C_DIM" ;;
     esac
 
+    local pend
+    if [[ -z "$PENDING" ]]; then
+        pend="${C_GRN}all delivered${C_RESET}"
+    else
+        pend="${C_YEL}${PENDING}${C_RESET} ${C_DIM}(retrying every ${PUSH_MIN_INTERVAL}s)${C_RESET}"
+    fi
+
     printf '%s\n' "${C_CYN}════════════════════════════════════════════════════════════════════════${C_RESET}"
     printf ' %sDESY · Metadata Schema report%s\n' "$C_BOLD" "$C_RESET"
-    printf ' %sAli Farzanehpoor Alwars · a.farzaneh@desy.de%s\n' "$C_DIM" "$C_RESET"
+    printf ' %sAli Farzanehpoor Alwars · a.farzaneh@desy.de · %s%s\n' \
+           "$C_DIM" "$TZ" "$C_RESET"
     printf '%s\n' "${C_CYN}════════════════════════════════════════════════════════════════════════${C_RESET}"
     printf ' %-11s %s\n' "project"  "$PROJECT_DIR"
     printf ' %-11s %s  %s(inotify: close_write · moved_to — not on keystroke)%s\n' \
@@ -187,16 +237,26 @@ build_frame() {
     printf '%s\n' "${C_DIM}────────────────────────────────────────────────────────────────────────${C_RESET}"
     printf ' %-11s %s · %s\n' "last save" "$LAST_SAVE" "$LAST_FILE"
     printf ' %-11s %s\n' "snapshot"   "$LAST_BACKUP"
-    printf ' %-11s %s\n' "remotes"    \
-      "ok:[${PUSH_OK[*]:-—}]  fail:[${PUSH_FAIL[*]:-—}]  throttle:${PUSH_MIN_INTERVAL}s"
-    printf ' %-11s %s\n' "session"    \
-      "${SESSION_BUILDS} builds · ${SESSION_OK} ok · ${SESSION_FAIL} failed"
+    printf ' %-11s ok:[%s]  fail:[%s]\n' "last push" \
+           "${PUSH_OK[*]:-—}" "${PUSH_FAIL[*]:-—}"
+    printf ' %-11s %s  %s${C_DIM}(last attempt %s)${C_RESET}\n' "queue" "$pend" "" "$LAST_FLUSH_HUMAN"
+    printf ' %-11s %s\n' "session" \
+           "${SESSION_BUILDS} builds · ${SESSION_OK} ok · ${SESSION_FAIL} failed"
     printf '%s\n' "${C_DIM}────────────────────────────────────────────────────────────────────────${C_RESET}"
-    printf ' %s⟳  waiting for the next save …        Ctrl-C to stop%s\n' "$C_DIM" "$C_RESET"
+    printf ' %s⟳  watching …   Ctrl-C to stop%s\n' "$C_DIM" "$C_RESET"
     printf '%s\n' "${C_CYN}════════════════════════════════════════════════════════════════════════${C_RESET}"
 }
 
 draw() { printf '\033[H\033[J'; build_frame; }
+
+draw_if_changed() {
+    local sig="${STATE}|${BUILD_NO}|${PENDING}|${LAST_BACKUP}|${LAST_SAVE}|${LAST_FILE}|\
+${PUSH_OK[*]:-}|${PUSH_FAIL[*]:-}|${WARNINGS}|${ERR_LINE}|${PDF_PAGES}|${PDF_SIZE}|\
+${LAST_START}|${LAST_END}|${DUR_S}|${LAST_FLUSH_HUMAN}"
+    [[ "$sig" == "$DRAW_SIG" ]] && return 0
+    DRAW_SIG="$sig"
+    draw
+}
 
 # ------------------------------- VERSION LOG ---------------------------------
 record_version() {
@@ -209,7 +269,7 @@ record_version() {
     sha="$(sha256sum "${PROJECT_DIR}/${MAIN_TEX}" 2>/dev/null | cut -d' ' -f1)"
     bytes="$(stat -c%s "$pdf" 2>/dev/null || echo 0)"
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-        "$(date -Is)" "$REV" "$BUILD_NO" "$STATE" "$DUR_S" \
+        "$(now_iso)" "$REV" "$BUILD_NO" "$STATE" "$DUR_S" \
         "$PDF_PAGES" "$bytes" "${sha:-na}" "$LAST_BACKUP" >> "$VERSIONS_TSV"
 }
 
@@ -220,7 +280,8 @@ make_backup() {
     local dest="${BACKUP_ROOT}/v${REV}_$(date +%Y-%m-%d_%H-%M-%S)_$(basename "$PROJECT_DIR").zip"
     if ( cd "$PROJECT_DIR" && zip -r -9 -q "$dest" . \
             -x 'build/*' '.git/*' '.build-logs/*' '*.aux' '*.log' '*.out' \
-               '*.toc' '*.synctex.gz' '*.fls' '*.fdb_latexmk' '*.bbl' '*.blg' ); then
+               '*.toc' '*.synctex.gz' '*.fls' '*.fdb_latexmk' '*.bbl' '*.blg' \
+               'main2.*' 't.pdf' '/main.pdf' ); then
         LAST_BACKUP="$(basename "$dest")"
     else
         LAST_BACKUP="backup failed"
@@ -230,63 +291,80 @@ make_backup() {
         | tail -n +$(( KEEP_BACKUPS + 1 )) | xargs -r rm -f
 }
 
-# ---------------------------------- GIT / SNS --------------------------------
-_push_remote() {
+# --------------------------------- PUBLISH -----------------------------------
+_ensure_remote() {
     local name="$1" url="$2"
     ( cd "$PROJECT_DIR" || exit 1
       if git remote get-url "$name" >/dev/null 2>&1
          then git remote set-url "$name" "$url"
-         else git remote add    "$name" "$url"; fi
-      timeout 180 git push -q "$name" "HEAD:${GIT_BRANCH}" )
+         else git remote add    "$name" "$url"; fi )
 }
 
-sns_sync() {
-    (( SNS_ENABLE )) || return 0
-    command -v rclone >/dev/null 2>&1 || { PUSH_FAIL+=("sns:rclone"); return 0; }
+push_gitlab() {
+    _ensure_remote "$GITLAB_REMOTE" "$GITLAB_URL"
+    timeout "$GIT_TIMEOUT" git -C "$PROJECT_DIR" push -q \
+        "$GITLAB_REMOTE" "HEAD:${GIT_BRANCH}" >/dev/null 2>&1
+}
 
+push_github() {
+    _ensure_remote "$GITHUB_REMOTE" "$GITHUB_URL"
+    timeout "$GIT_TIMEOUT" git -C "$PROJECT_DIR" push -q \
+        "$GITHUB_REMOTE" "HEAD:${GIT_BRANCH}" >/dev/null 2>&1
+}
+
+push_sns() {
+    command -v rclone >/dev/null 2>&1 || return 1
     local rc=0
     if [[ "$SNS_MODE" == "mirror" ]]; then
         rclone sync "$PROJECT_DIR" "${SNS_REMOTE}:${SNS_PATH}" \
             --exclude 'build/**' --exclude '.git/**' --exclude '.build-logs/**' \
-            --create-empty-src-dirs --quiet --timeout 120 || rc=$?
+            --create-empty-src-dirs --quiet \
+            --contimeout "${RCLONE_CONTIMEOUT}s" --timeout "${RCLONE_TIMEOUT}s" \
+            --retries 1 --low-level-retries 1 || rc=$?
     else
-        [[ "$LAST_BACKUP" == *.zip ]] || return 0
+        [[ "$LAST_BACKUP" == *.zip ]] || return 0   # nothing to send yet
         rclone copy "${BACKUP_ROOT}/${LAST_BACKUP}" \
-            "${SNS_REMOTE}:${SNS_PATH}/snapshots" --quiet --timeout 120 || rc=$?
+            "${SNS_REMOTE}:${SNS_PATH}/snapshots" --quiet \
+            --contimeout "${RCLONE_CONTIMEOUT}s" --timeout "${RCLONE_TIMEOUT}s" \
+            --retries 1 --low-level-retries 1 || rc=$?
     fi
-    (( rc == 0 )) && PUSH_OK+=("sns") || PUSH_FAIL+=("sns")
+    (( rc == 0 ))
 }
 
-git_sync() {
-    (( GIT_ENABLE )) || return 0
-    command -v git >/dev/null 2>&1 || { PUSH_FAIL+=("git:missing"); return 0; }
-    ( cd "$PROJECT_DIR" && git rev-parse --git-dir >/dev/null 2>&1 ) \
-        || { PUSH_FAIL+=("not-a-repo"); return 0; }
+# Try every pending remote, independently. Never aborts the script.
+flush_remotes() {
+    [[ -z "$PENDING" ]] && return 0
+    local snapshot="$PENDING" r
+    PUSH_OK=(); PUSH_FAIL=()
+    for r in $snapshot; do
+        case "$r" in
+            gitlab) if push_gitlab; then pending_del gitlab; PUSH_OK+=("gitlab")
+                    else PUSH_FAIL+=("gitlab"); fi ;;
+            github) if push_github; then pending_del github; PUSH_OK+=("github")
+                    else PUSH_FAIL+=("github"); fi ;;
+            sns)    if push_sns;    then pending_del sns;    PUSH_OK+=("sns")
+                    else PUSH_FAIL+=("sns");    fi ;;
+        esac
+    done
+    LAST_FLUSH_HUMAN="$(now_clock)"
+    log_session "flush: ok=[${PUSH_OK[*]:-}] fail=[${PUSH_FAIL[*]:-}] pending=[${PENDING:-—}]"
+}
 
+maybe_flush() {
+    [[ -z "$PENDING" ]] && return 0
+    local t; t=$(date +%s)
+    (( t - LAST_ATTEMPT_EPOCH < PUSH_MIN_INTERVAL )) && return 0
+    LAST_ATTEMPT_EPOCH=$t
+    flush_remotes
+}
+
+git_commit() {
+    (( GIT_ENABLE )) || return 0
+    ( cd "$PROJECT_DIR" && git rev-parse --git-dir >/dev/null 2>&1 ) || return 0
     ( cd "$PROJECT_DIR" || exit 1
       git add -A
       git diff --cached --quiet && exit 0
-      git commit -q -m "build v${REV}: ${STATE} · $(date '+%Y-%m-%d %H:%M:%S')"
-    ) || { PUSH_FAIL+=("commit"); return 0; }
-
-    (( GIT_PUSH )) || return 0
-
-    local now; now=$(date +%s)
-    (( now - LAST_PUSH_EPOCH < PUSH_MIN_INTERVAL )) && return 0
-    LAST_PUSH_EPOCH=$now
-
-    PUSH_OK=(); PUSH_FAIL=()
-
-    if (( GITLAB_ENABLE )); then
-        _push_remote "$GITLAB_REMOTE" "$GITLAB_URL" \
-            && PUSH_OK+=("gitlab") || PUSH_FAIL+=("gitlab")
-    fi
-    if (( GITHUB_ENABLE )); then
-        _push_remote "$GITHUB_REMOTE" "$GITHUB_URL" \
-            && PUSH_OK+=("github") || PUSH_FAIL+=("github")
-    fi
-    sns_sync
-    log_session "push: ok=[${PUSH_OK[*]:-}] fail=[${PUSH_FAIL[*]:-}]"
+      git commit -q -m "build v${REV}: ${STATE} · $(date '+%Y-%m-%d %H:%M:%S %Z')" )
 }
 
 # ---------------------------------- BUILD ------------------------------------
@@ -295,7 +373,7 @@ run_build() {
     BUILD_NO=$(( BUILD_NO + 1 ))
     REV=$(( REV + 1 ))
     STATE="building"
-    LAST_START="$(date '+%H:%M:%S')"
+    LAST_START="$(now_clock)"
     LAST_END="--:--:--"
     DUR_S="…"
     ERR_LINE="—"
@@ -313,7 +391,7 @@ run_build() {
     rc=$?
     t1=$(date +%s%3N)
 
-    LAST_END="$(date '+%H:%M:%S')"
+    LAST_END="$(now_clock)"
     DUR_S=$(awk -v d=$(( t1 - t0 )) 'BEGIN{printf "%.2f", d/1000}')
 
     if (( rc == 0 )); then
@@ -330,41 +408,65 @@ run_build() {
     WARNINGS=$(grep -c -E 'LaTeX Warning|Package [^ ]+ Warning' "$BUILD_LOG" 2>/dev/null || true)
     WARNINGS="${WARNINGS:-0}"
 
-    local pdf="${BUILD_DIR}/${MAIN_TEX%.tex}.pdf"
+    local pdf="${BUILD_DIR}/${MAIN_TEX%.tex}.pdf" bytes
     if [[ -f "$pdf" ]]; then
         PDF_PAGES="$(pdfinfo "$pdf" 2>/dev/null | awk '/^Pages:/{print $2}')"
         PDF_PAGES="${PDF_PAGES:-?}"
-        PDF_SIZE="$(human_size "$(stat -c%s "$pdf")")"
+        bytes="$(stat -c%s "$pdf" 2>/dev/null || echo 0)"
+        PDF_SIZE="$(mb "$bytes")"
     else
         PDF_PAGES="—"; PDF_SIZE="no pdf"
     fi
 
     [[ "$STATE" == "ok" ]] && make_backup
+
+    # local record is unconditional — never depends on the network
     record_version
-    git_sync
-    log_session "build=${BUILD_NO} rev=v${REV} state=${STATE} dur=${DUR_S}s reason=${reason}"
+    git_commit
+
+    (( GIT_PUSH )) || { log_session "build=${BUILD_NO} rev=v${REV} state=${STATE} reason=${reason} (push disabled)"; draw; return 0; }
+
+    (( GITLAB_ENABLE )) && pending_add gitlab
+    (( GITHUB_ENABLE )) && pending_add github
+    (( SNS_ENABLE ))    && pending_add sns
+    [[ -n "$PENDING" ]] && { LAST_ATTEMPT_EPOCH=0; maybe_flush; }
+
+    log_session "build=${BUILD_NO} rev=v${REV} state=${STATE} dur=${DUR_S}s reason=${reason} pending=[${PENDING:-—}]"
     draw
 }
 
 # --------------------------------- WATCHER -----------------------------------
 watch_loop() {
-    local fname
-    while IFS= read -r fname; do
-        [[ "$fname" =~ $WATCH_REGEX ]] || continue
-        LAST_FILE="$fname"
-        while IFS= read -r -t "$DEBOUNCE" _; do :; done
-        LAST_SAVE="$(date '+%H:%M:%S')"
-        run_build "save: ${fname}"
-    done < <(inotifywait -m -q -e close_write,moved_to --format '%f' "$PROJECT_DIR" 2>/dev/null)
+    local fname rc
+    while true; do
+        IFS= read -r -t "$RETRY_TICK" fname <&3
+        rc=$?
+        if (( rc == 0 )); then
+            if [[ "$fname" =~ $WATCH_REGEX ]]; then
+                LAST_FILE="$fname"
+                while IFS= read -r -t "$DEBOUNCE" _ <&3; do :; done
+                LAST_SAVE="$(now_clock)"
+                run_build "save: ${fname}"
+                continue
+            fi
+        elif (( rc == 1 )); then
+            log_session "inotifywait terminated — restarting watcher pipe"
+            break
+        fi
+        maybe_flush          # retry any queued remote, e.g. after VPN returns
+        draw_if_changed
+    done
 }
 
 # --------------------------------- CLEANUP -----------------------------------
 cleanup() {
     trap - EXIT INT TERM
     printf '\033[?25h\033[0m'
-    log_session "session end: ${SESSION_BUILDS} builds, ${SESSION_OK} ok, ${SESSION_FAIL} failed"
+    log_session "session end: ${SESSION_BUILDS} builds, ${SESSION_OK} ok, ${SESSION_FAIL} failed, pending=[${PENDING:-—}]"
     printf '\n %sSession:%s %d builds · %d ok · %d failed\n' \
            "$C_BOLD" "$C_RESET" "$SESSION_BUILDS" "$SESSION_OK" "$SESSION_FAIL"
+    [[ -n "$PENDING" ]] && printf ' %sQueued (not delivered):%s %s\n' \
+           "$C_YEL" "$C_RESET" "$PENDING"
     printf ' %sVersions:%s %s\n' "$C_BOLD" "$C_RESET" "$VERSIONS_TSV"
     printf ' %sSnapshots:%s %s\n\n' "$C_BOLD" "$C_RESET" "$BACKUP_ROOT"
     exit 0
@@ -384,10 +486,11 @@ main() {
     require_tools
     mkdir -p "$BUILD_DIR" "$LOG_DIR" "$BACKUP_ROOT"
     init_state_from_log
+    prune_artefacts
     trap cleanup EXIT INT TERM
 
     printf '\033[2J\033[?25l'
-    log_session "session start (cores=${CORES}, project=${PROJECT_DIR})"
+    log_session "session start (cores=${CORES}, tz=${TZ}, project=${PROJECT_DIR})"
 
     draw
     (( OPT_NO_BUILD )) || run_build "startup"
