@@ -259,9 +259,18 @@
   \number#1%
 }
 
+\newcount\vminutes
+\newcount\vhours
+
 \newcommand*{\vhhmm}{%
-  \vtwo{\numexpr\time/60\relax}%
-  \vtwo{\numexpr\time-60*(\time/60)\relax}%
+  \vminutes=\time
+  \vhours=\vminutes
+  \divide\vhours by 60
+  \multiply\vhours by 60
+  \advance\vminutes by -\vhours
+  \vhours=\time
+  \divide\vhours by 60
+  \vtwo{\vhours}\vtwo{\vminutes}%
 }
 
 \newcommand*{\vrandten}{%
