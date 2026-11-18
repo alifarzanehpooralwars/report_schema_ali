@@ -239,7 +239,7 @@ build_frame() {
     printf ' %-11s %s\n' "snapshot"   "$LAST_BACKUP"
     printf ' %-11s ok:[%s]  fail:[%s]\n' "last push" \
            "${PUSH_OK[*]:-—}" "${PUSH_FAIL[*]:-—}"
-    printf ' %-11s %s  %s${C_DIM}(last attempt %s)${C_RESET}\n' "queue" "$pend" "" "$LAST_FLUSH_HUMAN"
+    printf ' %-11s %s  %s(last attempt %s)%s\n' "queue" "$pend" "$C_DIM" "$LAST_FLUSH_HUMAN" "$C_RESET"
     printf ' %-11s %s\n' "session" \
            "${SESSION_BUILDS} builds · ${SESSION_OK} ok · ${SESSION_FAIL} failed"
     printf '%s\n' "${C_DIM}────────────────────────────────────────────────────────────────────────${C_RESET}"
