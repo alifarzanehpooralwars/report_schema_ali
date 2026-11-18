@@ -262,18 +262,21 @@
   \vtwo{\numexpr\time-60*(\time/60)\relax}}
 \newcommand*{\vrandten}{%
   \ifdefined\pdfuniformdeviate
-    \pdfuniformdeviate 10\pdfuniformdeviate 10\pdfuniformdeviate 10%
-    \pdfuniformdeviate 10\pdfuniformdeviate 10\pdfuniformdeviate 10%
-    \pdfuniformdeviate 10\pdfuniformdeviate 10\pdfuniformdeviate 10%
-    \pdfuniformdeviate 10%
+    \number\pdfuniformdeviate 10%
+    \number\pdfuniformdeviate 10%
+    \number\pdfuniformdeviate 10%
+    \number\pdfuniformdeviate 10%
+    \number\pdfuniformdeviate 10%
+    \number\pdfuniformdeviate 10%
+    \number\pdfuniformdeviate 10%
+    \number\pdfuniformdeviate 10%
+    \number\pdfuniformdeviate 10%
+    \number\pdfuniformdeviate 10%
   \else
     0000000000%
   \fi}
 \newcommand*{\vstamp}{%
   \the\year\vtwo{\month}\vtwo{\day}\_\vhhmm\_\vrandten}
-\IfFileExists{build/version.tex}
-  {\input{build/version.tex}}          % external version wins (still needs \_)
-  {\newcommand{\docversion}{v\vstamp}}
 \makeatother
 
 % =============================================================================
