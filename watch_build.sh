@@ -438,23 +438,26 @@ run_build() {
 # --------------------------------- WATCHER -----------------------------------
 watch_loop() {
     local fname rc
+    exec 3< <(inotifywait -m -q -e close_write,moved_to --format '%f' "$PROJECT_DIR" 2>/dev/null)
     while true; do
-        IFS= read -r -t "$RETRY_TICK" fname <&3
-        rc=$?
-        if (( rc == 0 )); then
-            if [[ "$fname" =~ $WATCH_REGEX ]]; then
-                LAST_FILE="$fname"
-                while IFS= read -r -t "$DEBOUNCE" _ <&3; do :; done
-                LAST_SAVE="$(now_clock)"
-                run_build "save: ${fname}"
-                continue
-            fi
-        elif (( rc == 1 )); then
-            log_session "inotifywait terminated — restarting watcher pipe"
-            break
+        if IFS= read -r -t "$RETRY_TICK" fname <&3; then
+            [[ "$fname" =~ $WATCH_REGEX ]] || continue
+            LAST_FILE="$fname"
+            while IFS= read -r -t "$DEBOUNCE" _ <&3; do :; done
+            LAST_SAVE="$(now_clock)"
+            run_build "save: ${fname}"
+            continue
         fi
-        maybe_flush          # retry any queued remote, e.g. after VPN returns
-        draw_if_changed
+        rc=$?
+        if (( rc > 128 )); then                 # read timed out: normal heartbeat
+            maybe_flush
+            draw_if_changed
+        else                                    # inotifywait died: reopen and carry on
+            log_session "inotifywait exited (rc=$rc) — restarting"
+            exec 3<&-
+            sleep 1
+            exec 3< <(inotifywait -m -q -e close_write,moved_to --format '%f' "$PROJECT_DIR" 2>/dev/null)
+        fi
     done
 }
 
