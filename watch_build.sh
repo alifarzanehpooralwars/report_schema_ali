@@ -83,7 +83,13 @@ export GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME"
 export GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
 
 # --- watcher ------------------------------------------------------------------
-WATCH_REGEX="${WATCH_REGEX:-\.(tex|bib|sty|cls|bst)$}"
+# Recursive: every source file anywhere under PROJECT_DIR, not just main.tex.
+# Add extensions here as your tree grows (.yaml, .json, .bib already covered).
+WATCH_REGEX="${WATCH_REGEX:-\.(tex|bib|sty|cls|bst|xml|xsd|json|yaml|yml|png|jpe?g|svg|pdf)$}"
+# Never watch these: build output, logs and VCS would cause an endless
+# rebuild loop (latexmk writes the PDF, the write triggers a build, ad infinitum).
+WATCH_EXCLUDE="${WATCH_EXCLUDE:-/(build|\.build-logs|\.git)(/|$)}"
+WATCH_EVENTS="${WATCH_EVENTS:-close_write,moved_to,create,delete}"
 DEBOUNCE="${DEBOUNCE:-0.35}"
 LATEXMK_FLAGS=(-pdf -g -interaction=nonstopmode -file-line-error -synctex=1)
 CORES="$(nproc --all 2>/dev/null || echo 1)"
@@ -184,21 +190,21 @@ init_state_from_log() {
     REV="${REV:-0}"; BUILD_NO="${BUILD_NO:-0}"
 }
 
-# --- one-time housekeeping: stray root-level artefacts ------------------------
-prune_artefacts() {
-    local f
-    for f in main2.pdf main2.tex t.pdf main.pdf; do
-        [[ -e "${PROJECT_DIR}/${f}" ]] || continue
-        ( cd "$PROJECT_DIR" \
-          && git ls-files --error-unmatch "$f" >/dev/null 2>&1 \
-          && git rm -q --cached "$f" >/dev/null 2>&1 ) || true
-    done
-    local gi="${PROJECT_DIR}/.gitignore"
-    touch "$gi"
-    for pat in '/main.pdf' 'main2.*' 't.pdf'; do
-        grep -qxF -- "$pat" "$gi" || printf '%s\n' "$pat" >> "$gi"
-    done
-}
+# # --- one-time housekeeping: stray root-level artefacts ------------------------
+# prune_artefacts() {
+#     local f
+#     for f in main2.pdf main2.tex t.pdf main.pdf; do
+#         [[ -e "${PROJECT_DIR}/${f}" ]] || continue
+#         ( cd "$PROJECT_DIR" \
+#           && git ls-files --error-unmatch "$f" >/dev/null 2>&1 \
+#           && git rm -q --cached "$f" >/dev/null 2>&1 ) || true
+#     done
+#     local gi="${PROJECT_DIR}/.gitignore"
+#     touch "$gi"
+#     for pat in '/main.pdf' 'main2.*' 't.pdf'; do
+#         grep -qxF -- "$pat" "$gi" || printf '%s\n' "$pat" >> "$gi"
+#     done
+# }
 
 # ---------------------------------- VIEW -------------------------------------
 build_frame() {
@@ -223,8 +229,8 @@ build_frame() {
            "$C_DIM" "$TZ" "$C_RESET"
     printf '%s\n' "${C_CYN}════════════════════════════════════════════════════════════════════════${C_RESET}"
     printf ' %-11s %s\n' "project"  "$PROJECT_DIR"
-    printf ' %-11s %s  %s(inotify: close_write · moved_to — not on keystroke)%s\n' \
-           "source" "$MAIN_TEX" "$C_DIM" "$C_RESET"
+    printf ' %-11s %s  %s(recursive — all sources, not on keystroke)%s\n' \
+           "watched" "$PROJECT_DIR" "$C_DIM" "$C_RESET"
     printf ' %-11s %s\n' "engine"   "latexmk + pdflatex · ${CORES} cores"
     printf ' %-11s %s\n' "outputs"  "build/${MAIN_TEX%.tex}.pdf · .build-logs/versions.tsv"
     printf '%s\n' "${C_DIM}────────────────────────────────────────────────────────────────────────${C_RESET}"
@@ -281,7 +287,7 @@ make_backup() {
     if ( cd "$PROJECT_DIR" && zip -r -9 -q "$dest" . \
             -x 'build/*' '.git/*' '.build-logs/*' '*.aux' '*.log' '*.out' \
                '*.toc' '*.synctex.gz' '*.fls' '*.fdb_latexmk' '*.bbl' '*.blg' \
-               'main2.*' 't.pdf' '/main.pdf' ); then
+               '/main.pdf' ); then
         LAST_BACKUP="$(basename "$dest")"
     else
         LAST_BACKUP="backup failed"
@@ -437,15 +443,25 @@ run_build() {
 
 # --------------------------------- WATCHER -----------------------------------
 watch_loop() {
-    local fname rc
-    exec 3< <(inotifywait -m -q -e close_write,moved_to --format '%f' "$PROJECT_DIR" 2>/dev/null)
+    local fpath rc rel
+
+    _spawn_inotify() {
+        exec 3< <(inotifywait -m -q -r \
+            -e "$WATCH_EVENTS" \
+            --exclude "$WATCH_EXCLUDE" \
+            --format '%w%f' "$PROJECT_DIR" 2>/dev/null)
+    }
+
+    _spawn_inotify
     while true; do
-        if IFS= read -r -t "$RETRY_TICK" fname <&3; then
-            [[ "$fname" =~ $WATCH_REGEX ]] || continue
-            LAST_FILE="$fname"
+        if IFS= read -r -t "$RETRY_TICK" fpath <&3; then
+            [[ "$fpath" =~ $WATCH_REGEX ]] || continue   # extension filter
+            [[ -e "$fpath" && ! -d "$fpath" ]] || continue
+            rel="${fpath#"$PROJECT_DIR"/}"
+            LAST_FILE="$rel"
             while IFS= read -r -t "$DEBOUNCE" _ <&3; do :; done
             LAST_SAVE="$(now_clock)"
-            run_build "save: ${fname}"
+            run_build "save: ${rel}"
             continue
         fi
         rc=$?
@@ -456,7 +472,7 @@ watch_loop() {
             log_session "inotifywait exited (rc=$rc) — restarting"
             exec 3<&-
             sleep 1
-            exec 3< <(inotifywait -m -q -e close_write,moved_to --format '%f' "$PROJECT_DIR" 2>/dev/null)
+            _spawn_inotify
         fi
     done
 }
@@ -489,7 +505,7 @@ main() {
     require_tools
     mkdir -p "$BUILD_DIR" "$LOG_DIR" "$BACKUP_ROOT"
     init_state_from_log
-    prune_artefacts
+    # prune_artefacts
     trap cleanup EXIT INT TERM
 
     printf '\033[2J\033[?25l'
