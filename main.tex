@@ -132,7 +132,16 @@
   keywordstyle=[1]{\color{codekeyword}\bfseries},
 }
 
-\lstdefinelanguage{MyXML}[XML]{
+% --- instance XML: self-contained, no dialect inheritance --------------------
+\lstdefinelanguage{MyXML}{
+  sensitive=true,
+  alsoletter={:,-,_,.},
+  morestring=[b]",
+  morestring=[b]',
+  morecomment=[s]{<!--}{-->},
+  morecomment=[s]{<?}{?>},
+  moredelim=[s][\color{codecomment}]{<!DOCTYPE}{>},
+  moredelim=[s][\color{codecomment}]{<![CDATA[}{]]>},
   morekeywords=[1]{
     run, event, payload, beamtime, device, daq, provenance,
     identifier, identifierList, status, people, role, checksum,
@@ -142,7 +151,16 @@
   keywordstyle=[1]{\color{codekeyword}\bfseries},
 }
 
-\lstdefinelanguage{XSD}[XML]{
+% --- XSD: self-contained ----------------------------------------------------
+\lstdefinelanguage{XSD}{
+  sensitive=true,
+  alsoletter={:,-,_,.},
+  morestring=[b]",
+  morestring=[b]',
+  morecomment=[s]{<!--}{-->},
+  morecomment=[s]{<?}{?>},
+  moredelim=[s][\color{codecomment}]{<!DOCTYPE}{>},
+  moredelim=[s][\color{codecomment}]{<![CDATA[}{]]>},
   morekeywords=[1]{
     xs:schema, xs:element, xs:attribute, xs:complexType, xs:simpleType,
     xs:sequence, xs:choice, xs:all, xs:group, xs:attributeGroup,
