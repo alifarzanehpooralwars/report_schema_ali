@@ -273,31 +273,14 @@
   \vtwo{\vhours}\vtwo{\vminutes}%
 }
 
-\newcommand*{\vrandten}{%
-  \ifdefined\pdfuniformdeviate
-    \number\pdfuniformdeviate 10\relax
-    \number\pdfuniformdeviate 10\relax
-    \number\pdfuniformdeviate 10\relax
-    \number\pdfuniformdeviate 10\relax
-    \number\pdfuniformdeviate 10\relax
-    \number\pdfuniformdeviate 10\relax
-    \number\pdfuniformdeviate 10\relax
-    \number\pdfuniformdeviate 10\relax
-    \number\pdfuniformdeviate 10\relax
-    \number\pdfuniformdeviate 10\relax
-  \else
-    0000000000%
-  \fi
-}
-
 \newcommand*{\vstamp}{%
   \the\year
   \vtwo{\month}%
   \vtwo{\day}%
   \_\vhhmm
-  \_\vrandten
 }
 
+% External version wins; otherwise generate automatically.
 \IfFileExists{build/version.tex}
   {\input{build/version.tex}}
   {\newcommand*{\docversion}{v\vstamp}}
