@@ -1,0 +1,63 @@
+% a.tex — fragment: no \documentclass, no \begin{document}
+\chapter{Schema Layout}
+\label{ch:layout}
+
+The repository is organised so that core vocabulary, facility extensions and
+experiment bindings can be versioned independently.
+
+\begin{lstlisting}[style=tree, caption={Directory layout of the metadata-schema repository.},
+                   label={lst:layout}]
+metadata-schemas/
+|
+|-- core/
+|   |-- identifiers-and-status
+|   |-- people-and-roles
+|   |-- dates-and-units
+|   |-- rights-and-licences
+|   |-- access-policy
+|   |-- funding-and-discovery
+|   |-- references-and-relations
+|   |-- files-and-checksums
+|   |-- storage-and-catalogues
+|   |-- runs-and-measurements
+|   |-- devices-and-configurations
+|   |-- daq-and-control-references
+|   |-- provenance
+|
+|-- facilities/
+|   |-- testbeam/
+|   |   |-- beamtime-and-slots
+|   |   |-- beam-and-area
+|   |   |-- diagnostics-and-safety
+|   |-- other-facility/
+|
+|-- experiments/
+|   |-- babyiaxo/
+|   |-- alps2/
+|   |-- madmax/
+|   |-- flashforward/
+|
+|-- validation/
+|   |-- xsd/
+|   |-- shared-rules/
+|   |-- facility-rules/
+|   |-- experiment-rules/
+|   |-- integration-tests/
+|
+|-- examples/
+|   |-- testbeam-babyiaxo/
+|   |-- alps2/
+|   |-- madmax-and-flashforward/
+|   |-- invalid-examples/
+|
+|-- migrations-and-compatibility/
+|   |-- schema-versions/
+|   |-- upgrade-rules/
+|   |-- compatibility-tests/
+|
+|-- documentation/
+\end{lstlisting}
+
+The layout in Listing~\ref{lst:layout} separates concerns: \texttt{core} holds
+facility-independent vocabulary, while \texttt{facilities} and
+\texttt{experiments} extend it without forking.
