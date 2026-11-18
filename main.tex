@@ -5,7 +5,8 @@
 %
 %  External material
 %     a.tex  — included as a source fragment, inherits report styling
-%     b.pdf  — inserted verbatim as pages (pdfpages)
+%     b.pdf  — inserted verbatim as pages (pdfpages), Appendix
+%     *.xsd / *.xml — pulled in with \code{lang}{file}{caption}{label}
 % =============================================================================
 \documentclass[11pt,a4paper]{report}
 
@@ -70,6 +71,7 @@
   \renewcommand{\headrule}{%
     \hbox to\headwidth{\color{desyblue}\leaders\hrule height \headrulewidth\hfill}}}
 
+% Normal running pages
 \fancypagestyle{desy}{%
   \fancyhf{}%
   \fancyhead[L]{\small\nouppercase{\rightmark}}%
@@ -77,16 +79,16 @@
   \fancyfoot[C]{\small\thepage}%
   \desyheadrule
 }
+% Chapter-opening pages — same logo height, otherwise it visibly jumps.
 \fancypagestyle{plain}{%
   \fancyhf{}%
   \fancyhead[L]{\small\nouppercase{\rightmark}}%
-  \fancyhead[R]{\desylogo{1.0cm}}%
+  \fancyhead[R]{\desylogo{0.50cm}}%
   \fancyfoot[C]{\small\thepage}%
   \desyheadrule
 }
 \pagestyle{desy}
 
-% ---------------------------------------------------------------- code ------
 % ---------------------------------------------------------------- code ------
 \usepackage{listings}
 
@@ -109,6 +111,17 @@
   morecomment=[s]{<?}{?>},
   moredelim=[s][\color{codecomment}]{<!DOCTYPE}{>},
   moredelim=[s][\color{codecomment}]{<![CDATA[}{]]>},
+}
+
+% --- instance XML: your vocabulary, so tags are coloured too ------------------
+% Extend this list as the schema grows. Keep names lowercase as in the files.
+\lstdefinelanguage{MyXML}[XML]{
+  morekeywords=[1]{
+    run, event, payload, beamtime, device, daq, provenance,
+    identifier, identifierList, status, people, role, checksum,
+    storage, catalogue, access, policy, rights, licence, funding,
+    references, relations, measurement, configuration
+  },
 }
 
 % --- XSD: XML + curated vocabulary (elements blue, attributes teal) ----------
@@ -163,8 +176,12 @@
 }
 
 % --- helper: \code{lang}{file}{caption}{label} -------------------------------
+% Fails soft: a missing file yields a warning + placeholder, never a dead build.
 \newcommand{\code}[4]{%
-  \lstinputlisting[language=#1, caption={#3}, label={lst:#4}]{#2}%
+  \IfFileExists{#2}%
+    {\lstinputlisting[language=#1, caption={#3}, label={lst:#4}]{#2}}%
+    {\PackageWarningNoLine{main}{missing listing file: #2}%
+     \begin{center}\itshape\small (#2 not available)\end{center}}%
 }
 
 % -------------------------------------------------------- section styling ---
@@ -214,13 +231,6 @@
 
 % ------------------------------------------------------------ front matter --
 \pagenumbering{roman}
-
-% \chapter*{Abstract}
-% \markboth{}{Abstract}
-% \addcontentsline{toc}{chapter}{Abstract}
-% This report specifies a metadata schema for DESY test-beam campaigns
-% and the serialisation conventions used by the acquisition software.
-% Replace this paragraph with the real abstract.
 
 \tableofcontents
 \thispagestyle{plain}
@@ -298,52 +308,46 @@ The schema is versioned together with the report.
 
 % --- 1) another .tex file, merged as if typed here ---------------------------
 % The file must be a FRAGMENT: no \documentclass, no \begin{document}.
-% Edits to a.tex trigger a rebuild (it matches WATCH_REGEX \.tex$).
+% Edits to a.tex trigger a rebuild (matches WATCH_REGEX \.tex$).
 \IfFileExists{a.tex}{%
   \input{a.tex}%
 }{%
   \PackageWarningNoLine{main}{a.tex not found -- skipping}%
 }
 
-
+% --- 2) schema sources pulled in as listings --------------------------------
 \chapter{Core Schema Files}
 \label{ch:schemas}
 
 \section{Identifiers and status}
 \label{sec:identifiers}
-The identifier block is defined in \texttt{identifiers.xsd}:
+The identifier block is defined in \texttt{core/identifiers.xsd}:
 \code{XSD}{core/identifiers.xsd}{Definition of identifier and status types.}{identifiers}
 
 A conforming instance looks like this:
-\code{XML}{examples/testbeam-babyiaxo/run-0001.xml}{Example run document.}{run0001}
+\code{MyXML}{examples/testbeam-babyiaxo/run-0001.xml}{Example run document.}{run0001}
 
-
-
-
-% --- 2) an external PDF, inserted page-for-page -----------------------------
-% \includepdf starts a new page group; the report header/footer do NOT apply
-% to these pages, and page numbering inside them is the source PDF's own.
+% --- 3) an external PDF, inserted page-for-page, as an appendix ------------
+% \includepdf starts a new page group; the DESY header is kept but page
+% numbering inside these pages is the source PDF's own.
 \IfFileExists{b.pdf}{%
+  \clearpage
+  \appendix
+  \chapter{External Document}
+  \label{app:external}
   \includepdf[
-      pages=-,                       % - = all pages; also: 1-3, 5, 7-
-      pagecommand={\thispagestyle{desy}},  % keep DESY header over each page
-      fitpaper=false,                % true = use the source page size
-      scale=0.94,                    % shrink slightly to fit text block
-      offset=0 -0.6cm,               % nudge vertically if needed
-      frame=false,                   % true = thin border, useful for checks
-      link=false,                    % no hyperlinks from the source
-      picturecommand={},             % hook for overlay text
+      pages=-,                             % - = all pages; also 1-3, 5, 7-
+      pagecommand={\thispagestyle{desy}},  % DESY header over each page
+      fitpaper=false,                      % true = use source page size
+      scale=0.94,                          % shrink to fit the text block
+      offset=0 -0.6cm,                     % nudge vertically if needed
+      frame=false,                         % true = thin border, for checks
+      link=false,                          % no hyperlinks from the source
   ]{b.pdf}%
   \clearpage
 }{%
   \PackageWarningNoLine{main}{b.pdf not found -- skipping}%
 }
-
-% --- Optional: numbered + listed in the ToC ---------------------------------
-% \chapter{Appendix: external document}
-% \label{app:external}
-% \IfFileExists{b.pdf}{\includepdf[pages=-,
-%     pagecommand={\thispagestyle{desy}}]{b.pdf}\clearpage}{}
 
 % ------------------------------------------------------------- bibliography -
 \IfFileExists{references.bib}{%
